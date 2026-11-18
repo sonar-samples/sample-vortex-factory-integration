@@ -1,0 +1,12 @@
+# Replace @your-org/factory-owners with a human team. The factory App must never be an owner.
+/.github/                @your-org/factory-owners
+/.claude/                @your-org/factory-owners
+/CLAUDE.md               @your-org/factory-owners
+/AGENTS.md               @your-org/factory-owners
+/.sonar-config.json      @your-org/factory-owners
+/sonar-project.properties @your-org/factory-owners
+# swap: your build files
+/build.gradle            @your-org/factory-owners
+/settings.gradle         @your-org/factory-owners
+/gradle.properties       @your-org/factory-owners
+/gradle/                 @your-org/factory-owners

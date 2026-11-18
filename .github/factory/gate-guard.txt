@@ -1,0 +1,8 @@
+# file-glob:ERE. A patch may not add or remove a line matching the regex in a file matching the glob.
+# Keeps the agent out of the analysis and coverage configuration. Gradle example; swap for your build.
+*build.gradle:sonar|jacoco
+*build.gradle.kts:sonar|jacoco
+*settings.gradle:sonar|jacoco
+*settings.gradle.kts:sonar|jacoco
+gradle.properties:sonar|jacoco
+gradle/*:sonar|jacoco

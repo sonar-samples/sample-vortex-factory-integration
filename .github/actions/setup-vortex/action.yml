@@ -1,0 +1,44 @@
+name: Set up Vortex
+description: Install the pinned SonarQube CLI, wire Vortex into Claude Code, and warm the context engine.
+inputs:
+  workspace:
+    description: Checkout the agent will work in.
+    default: ws
+  factory-dir:
+    description: Directory holding factory.env.
+    required: true
+  evidence-dir:
+    description: Where logs are written.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install the SonarQube CLI
+      shell: bash
+      env:
+        EVIDENCE_DIR: ${{ inputs.evidence-dir }}
+      run: |
+        [[ "$SONAR_CLI_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::SONAR_CLI_SHA256 is not set in versions.env"; exit 1; }
+        url="https://binaries.sonarsource.com/Distribution/sonarqube-cli/${SONAR_CLI_VERSION}/linux/sonarqube-cli-${SONAR_CLI_VERSION}-linux-x86-64.bin"
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/sonar.bin" "$url"
+        echo "${SONAR_CLI_SHA256}  $RUNNER_TEMP/sonar.bin" | sha256sum --check -
+        install -D -m 0755 "$RUNNER_TEMP/sonar.bin" "$HOME/.local/bin/sonar"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        mkdir -p "$EVIDENCE_DIR"
+        export PATH="$HOME/.local/bin:$PATH"
+        sonar integrate claude --non-interactive 2>&1 | tee "$EVIDENCE_DIR/integrate.log"
+    - name: Warm the context engine
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        EVIDENCE_DIR: ${{ inputs.evidence-dir }}
+        FACTORY_DIR: ${{ inputs.factory-dir }}
+      run: |
+        # shellcheck source=/dev/null
+        source "$FACTORY_DIR/factory.env"
+        start=$SECONDS
+        if [[ -n "$VORTEX_WARMUP_ECOSYSTEM" ]]; then
+          sonar context navigation get-map --ecosystem "$VORTEX_WARMUP_ECOSYSTEM" --depth 0 > "$EVIDENCE_DIR/warmup-map.txt"
+        fi
+        sonar context architecture get-constraints | tee "$EVIDENCE_DIR/warmup-constraints.txt"
+        echo "warm-up took $((SECONDS - start))s" | tee "$EVIDENCE_DIR/warmup-timing.txt"

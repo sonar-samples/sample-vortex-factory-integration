@@ -1,0 +1,212 @@
+name: Factory
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue to implement
+        required: true
+permissions: {}
+concurrency:
+  group: factory-${{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
+jobs:
+  intake:
+    name: Intake
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'factory:run'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: read
+      contents: read
+    outputs:
+      issue_number: ${{ steps.task.outputs.issue_number }}
+      issue_title: ${{ steps.task.outputs.issue_title }}
+      base_sha: ${{ github.sha }}
+    steps:
+      - name: Freeze the task
+        id: task
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.triggering_actor }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue_number }}
+        run: |
+          [[ "$ISSUE" =~ ^[0-9]+$ ]] || { echo "::error::bad issue number"; exit 1; }
+          role=$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .role_name)
+          case "$role" in admin | maintain | write) ;; *) echo "::error::$ACTOR has role '$role'; write access is required"; exit 1 ;; esac
+          mkdir -p task
+          gh api "repos/$REPO/issues/$ISSUE" \
+            | jq -e 'select(.pull_request == null and .state == "open") | {number, title, body: (.body // "")}' > task/task.json
+          {
+            echo "issue_number=$ISSUE"
+            echo "issue_title=$(jq -r .title task/task.json)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: factory-task
+          path: task/task.json
+          retention-days: 7
+
+  worker:
+    name: Worker
+    needs: intake
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: factory-worker
+    permissions:
+      contents: read
+    env:
+      # Model access: an Anthropic API key, optionally routed through your LLM gateway.
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+      ANTHROPIC_CUSTOM_HEADERS: ${{ secrets.ANTHROPIC_CUSTOM_HEADERS }}
+      SONARQUBE_CLI_TOKEN: ${{ secrets.SONARQUBE_CLI_TOKEN }}
+      SONARQUBE_CLI_ORG: ${{ vars.SONARQUBE_CLI_ORG }}
+      DO_NOT_TRACK: "1"
+      DISABLE_AUTOUPDATER: "1"
+      BASE_SHA: ${{ needs.intake.outputs.base_sha }}
+    outputs:
+      outcome: ${{ steps.run.outputs.outcome }}
+      patch_sha256: ${{ steps.run.outputs.patch_sha256 }}
+    steps:
+      # The agent works in ws/. The scripts run from ctl/, outside the agent's project directory.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.intake.outputs.base_sha }}
+          path: ws
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.intake.outputs.base_sha }}
+          path: ctl
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: factory-task
+          path: ${{ runner.temp }}/task
+      - name: Load pins and paths
+        run: |
+          grep -E "^[A-Z0-9_]+=" ctl/.github/factory/versions.env >> "$GITHUB_ENV"
+          {
+            echo "EVIDENCE_DIR=$RUNNER_TEMP/evidence"
+            echo "PATCH_DIR=$RUNNER_TEMP/patch"
+            echo "WS=$GITHUB_WORKSPACE/ws"
+            echo "TASK_FILE=$RUNNER_TEMP/task/task.json"
+          } >> "$GITHUB_ENV"
+      - name: Create the work branch
+        working-directory: ws
+        env:
+          ISSUE: ${{ needs.intake.outputs.issue_number }}
+        run: git switch -c "factory/issue-$ISSUE"
+      - uses: ./ctl/.github/actions/setup-toolchain
+        with:
+          cache-prefix: ws/
+          save-cache: "false"
+      - name: Warm the build # swap point 2
+        working-directory: ws
+        run: ./gradlew compileJava
+      - name: Install Claude Code
+        run: |
+          npm install --global --prefix "$HOME/.local" "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: ./ctl/.github/actions/setup-vortex
+        with:
+          factory-dir: ${{ github.workspace }}/ctl/.github/factory
+          evidence-dir: ${{ runner.temp }}/evidence
+      - name: Preflight
+        working-directory: ws
+        run: ../ctl/.github/factory/preflight.sh
+      - name: Run the agent
+        id: run
+        run: ctl/.github/factory/run-worker.sh
+      - name: Summarize evidence
+        if: always()
+        env:
+          ISSUE_NUMBER: ${{ needs.intake.outputs.issue_number }}
+        run: ctl/.github/factory/evidence.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.run.outputs.outcome == 'clean'
+        with:
+          name: factory-patch
+          path: ${{ runner.temp }}/patch
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: factory-evidence
+          path: ${{ runner.temp }}/evidence
+          retention-days: 30
+
+  publish:
+    name: Publish
+    needs: [intake, worker]
+    if: needs.worker.outputs.outcome == 'clean'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: factory-publish
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.intake.outputs.base_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: factory-patch
+          path: ${{ runner.temp }}/patch
+      - name: Mint the App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.FACTORY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Check, push, and open the PR
+        id: publish
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          PATCH: ${{ runner.temp }}/patch/factory.patch
+          ROUNDS_FILE: ${{ runner.temp }}/patch/rounds.md
+          PATCH_SHA256: ${{ needs.worker.outputs.patch_sha256 }}
+          BASE_SHA: ${{ needs.intake.outputs.base_sha }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          ISSUE_NUMBER: ${{ needs.intake.outputs.issue_number }}
+          ISSUE_TITLE: ${{ needs.intake.outputs.issue_title }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: .github/factory/publish.sh run
+    outputs:
+      pr_url: ${{ steps.publish.outputs.pr_url }}
+
+  report:
+    name: Report
+    needs: [intake, worker, publish]
+    if: always() && needs.intake.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: factory-publish
+    permissions: {}
+    steps:
+      - name: Mint the App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.FACTORY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FACTORY_APP_PRIVATE_KEY }}
+          permission-issues: write
+      - name: Comment on the issue
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          ISSUE: ${{ needs.intake.outputs.issue_number }}
+          OUTCOME: ${{ needs.worker.outputs.outcome || needs.worker.result }}
+          PR_URL: ${{ needs.publish.outputs.pr_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          body="Factory run finished: **$OUTCOME**."
+          [ -z "$PR_URL" ] || body="$body Pull request: $PR_URL."
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "$body Run: $RUN_URL"

@@ -1,0 +1,9 @@
+Read
+Edit
+Write
+Glob
+Grep
+Bash(git diff*)
+Bash(git status*)
+Bash(sonar context *)
+Bash(sonar analyze agentic *)

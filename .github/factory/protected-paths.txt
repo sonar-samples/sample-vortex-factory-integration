@@ -1,0 +1,13 @@
+# Bash glob patterns (case-insensitive, * matches /). A patch touching any match is rejected.
+.github/*
+.claude/*
+.husky/*
+.mcp.json
+CLAUDE.md
+*/CLAUDE.md
+AGENTS.md
+*/AGENTS.md
+.sonar-config.json
+sonar-project.properties
+CODEOWNERS
+*/CODEOWNERS

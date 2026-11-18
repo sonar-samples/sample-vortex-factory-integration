@@ -1,0 +1,8 @@
+{
+  "project": {
+    "projectKey": "REPLACE_WITH_PROJECT_KEY",
+    "path": ".",
+    "region": "eu",
+    "organization": "REPLACE_WITH_ORG_KEY"
+  }
+}
