@@ -14,7 +14,7 @@ concurrency:
 jobs:
   intake:
     name: Intake
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'factory:run'
+    if: ${{ !github.event.repository.is_template && (github.event_name == 'workflow_dispatch' || github.event.label.name == 'factory:run') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

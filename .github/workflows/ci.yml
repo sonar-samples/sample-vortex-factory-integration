@@ -11,6 +11,8 @@ permissions: {}
 jobs:
   build:
     name: Build
+    # Skip in the template repository itself, which has no application to build.
+    if: ${{ !github.event.repository.is_template }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
