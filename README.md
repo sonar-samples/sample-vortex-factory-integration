@@ -1,8 +1,8 @@
-# Vortex software factory
+# Integrating Sonar Vortex into an agentic software factory (sample)
 
-A skeleton for an agentic software factory on GitHub Actions with [Sonar Vortex](https://www.sonarsource.com/blog/introducing-sonar-vortex/) built in. Label an issue `factory:run`; an agent implements it on an ephemeral runner, Vortex guides and checks the work, a separate job opens the pull request, and the SonarQube Cloud quality gate decides whether a human can merge.
+A sample showing one way to integrate [Sonar Vortex](https://www.sonarsource.com/blog/introducing-sonar-vortex/) into your own agentic software factory on GitHub Actions. Label an issue `factory:run`; an agent implements it on an ephemeral runner, Vortex guides and checks the work, a separate job opens the pull request, and the SonarQube Cloud quality gate decides whether a human can merge.
 
-There is no application code here. Copy the files into your repository.
+There is no application code here. Copy the files into your repository and adapt them to your own factory design. The tiers below are one way to split permissions, not the only one.
 
 ## Tiers
 
@@ -18,7 +18,7 @@ The worker checks out the base commit twice: `ws/` is the agent's project, `ctl/
 
 ## Requirements
 
-- SonarQube Cloud on an [Enterprise plan or annual Team plan](https://www.sonarsource.com/plans-and-pricing/sonarcloud/) with Vortex enabled for the organization, and Architecture analysis if you want `get-constraints` to return anything.
+- SonarQube Cloud on an [Enterprise plan or annual Team plan](https://www.sonarsource.com/plans-and-pricing/sonarcloud/) with Vortex enabled for the organization, and Architecture analysis with an intended architecture defined. Vortex works without one, but this sample's preflight refuses to start the agent if `get-constraints` returns nothing.
 - The project analyzed in CI on its default branch (`ci.yml` does this) with automatic analysis off. Vortex restores analyzer context from that analysis.
 - A GitHub plan that supports environments with secrets and rulesets on your repository.
 
@@ -29,7 +29,7 @@ The worker checks out the base commit twice: `ws/` is the agent's project, `ctl/
 3. Add the secrets and variables below.
 4. Create the GitHub App, install it on this repository only, and set `FACTORY_APP_CLIENT_ID` and `FACTORY_APP_PRIVATE_KEY`.
 5. Edit `.github/CODEOWNERS`. Push to the default branch so `ci.yml` analyzes it, then open one ordinary pull request so the SonarQube Cloud GitHub app reports on it. Don't import the ruleset yet.
-6. Import `.github/rulesets/main.json` (Settings > Rules > Rulesets > Import). It requires two checks: `Build` from `ci.yml` and `SonarCloud Code Analysis`, which the SonarQube Cloud GitHub app posts (integration ID 12526). A required check that has never reported leaves every pull request waiting, which is why the import comes after that first analysis. If you import earlier, add the SonarQube Cloud check to the ruleset's required checks by hand once it appears.
+6. Import `.github/rulesets/main.json` (Settings > Rules > Rulesets > Import). It requires two checks: `Build` from `ci.yml` and `SonarCloud Code Analysis`, which the SonarQube Cloud GitHub app posts (integration ID 12526). The check still uses that older name, so the string has to match exactly. A required check that has never reported leaves every pull request waiting, which is why the import comes after that first analysis. If you import earlier, add the SonarQube Cloud check to the ruleset's required checks by hand once it appears.
 7. File an issue and add the `factory:run` label.
 
 | Name | Kind | Scope | Value |
